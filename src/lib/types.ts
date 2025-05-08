@@ -18,3 +18,9 @@ export interface DailyPrice {
   date: Date;
   price: number;
 }
+
+export interface CommissionAgent {
+  id: string;
+  name: string;
+  percentage: number; // Store as a number e.g., 5 for 5%
+}
