@@ -7,14 +7,6 @@ export interface Booking {
   seatPrices?: { [seatNumber: number]: number }; // Price paid for each seat
 }
 
-// The Seat interface is no longer needed as individual seat selection is removed.
-// export interface Seat {
-//   id: number;
-//   isBooked: boolean;
-//   isSelected: boolean;
-//   isAvailable: boolean;
-// }
-
 export interface DailyPrice {
   date: Date;
   price: number;
@@ -27,3 +19,8 @@ export interface CommissionAgent {
   applicableDate?: Date; // If set, commission only applies to this specific date
 }
 
+export interface BookedSeatDetail {
+  bookingId: string;
+  userName: string;
+  price: number;
+}

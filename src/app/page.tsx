@@ -10,12 +10,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import type { Booking, DailyPrice } from '@/lib/types';
+import type { Booking, DailyPrice, BookedSeatDetail } from '@/lib/types';
 import { MOCK_BOOKINGS } from '@/data/mockBookings';
 import { MOCK_DAILY_PRICES } from '@/data/mockDailyPrices';
 import { addDays, format, isBefore, startOfDay } from 'date-fns';
-import { CalendarDays, CheckCircle2, Ticket, AlertTriangle, DollarSign, User, BarChart3, MinusCircle, PlusCircle, BoxSelect, Grid3X3 } from 'lucide-react';
+import { CalendarDays, CheckCircle2, Ticket, AlertTriangle, DollarSign, User, BarChart3, MinusCircle, PlusCircle, BoxSelect, Grid3X3, Pencil, Trash2 } from 'lucide-react';
 
 const TOTAL_SEATS = 35;
 const DEFAULT_SEAT_PRICE = 25;
@@ -28,6 +29,15 @@ export default function HomePage() {
   const [userName, setUserName] = useState<string>('');
   const [bookingQuantity, setBookingQuantity] = useState<string>('1');
   const [currentPriceInput, setCurrentPriceInput] = useState<string>(String(DEFAULT_SEAT_PRICE.toFixed(2)));
+  
+  const [editSeatPriceState, setEditSeatPriceState] = useState<{
+    isOpen: boolean;
+    bookingId: string;
+    seatNumber: number;
+    currentPrice: number;
+    newPrice: string;
+  } | null>(null);
+
   const { toast } = useToast();
 
   const getSeatPriceForDate = useCallback((date: Date): number => {
@@ -46,16 +56,11 @@ export default function HomePage() {
     }
   }, [selectedDate, getSeatPriceForDate]);
 
-  // Update bookingQuantity when selectedSeats change
   useEffect(() => {
     if (selectedSeats.length > 0) {
       setBookingQuantity(String(selectedSeats.length));
     }
-    // If selectedSeats becomes empty, bookingQuantity retains its last value from quantity input
-    // or defaults to '1' if it was also driven by selectedSeats.
-    // User can then adjust quantity input if they clear seat map selection.
     else if (selectedSeats.length === 0 && bookingQuantity !== '1' && parseInt(bookingQuantity,10) === 0 ) {
-        // if the quantity was set to 0 by clearing selected seats, set it to 1
         setBookingQuantity('1');
     }
   }, [selectedSeats, bookingQuantity]);
@@ -67,23 +72,106 @@ export default function HomePage() {
     setBookingQuantity('1'); 
   };
 
-  const handleSeatSelect = (seatNumber: number) => {
-    if (!selectedDate) return;
-    if (bookedSeatsForSelectedDate.includes(seatNumber)) {
-        toast({ title: "Seat Booked", description: "This seat is already booked.", variant: "destructive", action: <AlertTriangle className="text-destructive-foreground" /> });
-        return;
-    }
+  const bookedSeatDetailsMap = useMemo(() => {
+    const map = new Map<number, BookedSeatDetail>();
+    if (!selectedDate) return map;
+
+    const startOfSelected = startOfDay(selectedDate);
+    currentBookings
+      .filter(booking => startOfDay(booking.date).getTime() === startOfSelected.getTime())
+      .forEach(booking => {
+        booking.seats.forEach(seatNum => {
+          map.set(seatNum, {
+            bookingId: booking.id,
+            userName: booking.userName,
+            price: booking.seatPrices?.[seatNum] ?? getSeatPriceForDate(booking.date)
+          });
+        });
+      });
+    return map;
+  }, [selectedDate, currentBookings, getSeatPriceForDate]);
+
+
+  const handleSeatSelect = (seatNumber: number) => { // For selecting available seats
+    if (!selectedDate || bookedSeatDetailsMap.has(seatNumber)) return;
 
     setSelectedSeats(prevSelectedSeats => {
       const newSelectedSeats = prevSelectedSeats.includes(seatNumber)
         ? prevSelectedSeats.filter(s => s !== seatNumber)
         : [...prevSelectedSeats, seatNumber];
-      
-      // If no seats are selected via map, default quantity input to '1' to enable quantity booking mode.
-      // Otherwise, quantity is driven by map selection.
       setBookingQuantity(String(newSelectedSeats.length > 0 ? newSelectedSeats.length : 1));
       return newSelectedSeats;
     });
+  };
+
+  const handleOpenEditSeatPriceDialog = (bookingId: string, seatNumber: number) => {
+    const booking = currentBookings.find(b => b.id === bookingId);
+    if (!booking) return;
+    const currentPrice = booking.seatPrices?.[seatNumber] ?? getSeatPriceForDate(booking.date);
+    setEditSeatPriceState({
+      isOpen: true,
+      bookingId,
+      seatNumber,
+      currentPrice,
+      newPrice: String(currentPrice.toFixed(2)),
+    });
+  };
+
+  const handleConfirmEditSeatPrice = () => {
+    if (!editSeatPriceState) return;
+    const { bookingId, seatNumber, newPrice } = editSeatPriceState;
+    const parsedNewPrice = parseFloat(newPrice);
+
+    if (isNaN(parsedNewPrice) || parsedNewPrice < 0) {
+      toast({ title: "Invalid Price", description: "Please enter a valid positive price.", variant: "destructive" });
+      return;
+    }
+
+    setCurrentBookings(prevBookings =>
+      prevBookings.map(booking => {
+        if (booking.id === bookingId && booking.seatPrices) {
+          return {
+            ...booking,
+            seatPrices: {
+              ...booking.seatPrices,
+              [seatNumber]: parsedNewPrice,
+            },
+          };
+        }
+        return booking;
+      })
+    );
+
+    toast({ title: "Price Updated", description: `Price for seat ${seatNumber} updated to $${parsedNewPrice.toFixed(2)}.`, action: <CheckCircle2 className="text-green-500" /> });
+    setEditSeatPriceState(null);
+  };
+  
+  const handleUnbookSeat = (bookingId: string, seatNumber: number) => {
+    setCurrentBookings(prevBookings => {
+      const updatedBookings = prevBookings.map(booking => {
+        if (booking.id === bookingId) {
+          const newSeats = booking.seats.filter(s => s !== seatNumber);
+          const newSeatPrices = { ...booking.seatPrices };
+          if (newSeatPrices) delete newSeatPrices[seatNumber];
+          
+          if (newSeats.length === 0) return null; // Mark for removal if no seats left
+          
+          return { ...booking, seats: newSeats, seatPrices: newSeatPrices };
+        }
+        return booking;
+      }).filter(Boolean) as Booking[]; // Filter out null (removed) bookings
+      return updatedBookings;
+    });
+    toast({ title: "Seat Unbooked", description: `Seat ${seatNumber} has been unbooked.`, action: <Trash2 className="text-red-500" /> });
+  };
+
+  const handleBookedSeatAction = (action: 'edit' | 'unbook', bookingId: string, seatNumber: number) => {
+    if (action === 'edit') {
+      handleOpenEditSeatPriceDialog(bookingId, seatNumber);
+    } else if (action === 'unbook') {
+      // Potentially add a confirmation dialog here in the future
+      handleUnbookSeat(bookingId, seatNumber);
+    }
   };
 
 
@@ -148,11 +236,10 @@ export default function HomePage() {
     let quantityBooked: number;
 
     if (selectedSeats.length > 0) {
-      // Ensure all selected seats are actually available (double-check against bookedSeatsForSelectedDate)
       const stillAvailableSelectedSeats = selectedSeats.filter(s => !bookedSeatsForSelectedDate.includes(s));
       if (stillAvailableSelectedSeats.length !== selectedSeats.length) {
         toast({ title: 'Seat Conflict', description: 'Some selected seats were booked by another user. Please re-select.', variant: 'destructive', action: <AlertTriangle className="text-destructive-foreground" /> });
-        setSelectedSeats(stillAvailableSelectedSeats); // Update UI to show only valid selections
+        setSelectedSeats(stillAvailableSelectedSeats); 
         setBookingQuantity(String(stillAvailableSelectedSeats.length || 1));
         return;
       }
@@ -216,7 +303,6 @@ export default function HomePage() {
         if (booking.seatPrices) {
           return totalProfit + Object.values(booking.seatPrices).reduce((sum, price) => sum + price, 0);
         }
-        // Fallback if seatPrices is somehow missing (should not happen with new logic)
         return totalProfit + (booking.seats.length * getSeatPriceForDate(booking.date));
       }, 0);
   }, [selectedDate, currentBookings, getSeatPriceForDate]);
@@ -224,19 +310,19 @@ export default function HomePage() {
   const disablePastDates = (date: Date) => isBefore(date, startOfDay(new Date()));
 
   const handleQuantityInputChange = (value: string) => {
-    setSelectedSeats([]); // Clear map selection if quantity input is directly used
+    setSelectedSeats([]); 
     const numValue = parseInt(value, 10);
     if (value === '') {
-      setBookingQuantity(''); // Allow empty for typing
+      setBookingQuantity(''); 
     } else if (!isNaN(numValue)) {
-      if (numValue <= 0) setBookingQuantity('1'); // Min 1 if has value
+      if (numValue <= 0) setBookingQuantity('1'); 
       else if (numValue > availableSeatsCount) setBookingQuantity(String(availableSeatsCount));
       else setBookingQuantity(String(numValue));
     }
   };
 
   const incrementQuantity = () => {
-    setSelectedSeats([]); // Clear map selection
+    setSelectedSeats([]); 
     const currentQuantity = parseInt(bookingQuantity, 10) || 0;
     if (currentQuantity < availableSeatsCount) {
       setBookingQuantity(String(currentQuantity + 1));
@@ -244,7 +330,7 @@ export default function HomePage() {
   };
 
   const decrementQuantity = () => {
-    setSelectedSeats([]); // Clear map selection
+    setSelectedSeats([]); 
     const currentQuantity = parseInt(bookingQuantity, 10) || 0;
     if (currentQuantity > 1) {
       setBookingQuantity(String(currentQuantity - 1));
@@ -283,7 +369,7 @@ export default function HomePage() {
               Select Your Date
             </CardTitle>
             <CardDescription>
-              Choose a date for booking. Dates with available seats are highlighted.
+              Choose a date for booking. Hover over booked seats to see details. Click for actions.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex justify-center">
@@ -324,7 +410,7 @@ export default function HomePage() {
                   </div>
                 </div>
                 <CardDescription className="mt-1 text-sm">
-                  Default is ${DEFAULT_SEAT_PRICE.toFixed(2)}. Modifying sets a custom price.
+                  Default is ${DEFAULT_SEAT_PRICE.toFixed(2)}. Modifying sets a custom price for new bookings.
                   Available seats: {availableSeatsCount}/{TOTAL_SEATS}.
                 </CardDescription>
               </div>
@@ -339,35 +425,39 @@ export default function HomePage() {
               <div className="space-y-6">
                 <div>
                   <Label htmlFor="userName" className="text-base font-medium flex items-center mb-1">
-                    <User className="mr-2 h-5 w-5 text-primary" /> Booking Name:
+                    <User className="mr-2 h-5 w-5 text-primary" /> Booking Name (for new bookings):
                   </Label>
                   <Input
                     id="userName"
                     type="text"
-                    placeholder="Enter name for booking"
+                    placeholder="Enter name for new booking"
                     value={userName}
                     onChange={(e) => setUserName(e.target.value)}
                     className="w-full rounded-md shadow-sm"
-                    aria-label="Booking name"
+                    aria-label="Booking name for new bookings"
                   />
                 </div>
 
                 <div>
                   <Label className="text-base font-medium flex items-center mb-2">
-                    <Grid3X3 className="mr-2 h-5 w-5 text-primary" /> Select Seats on Map:
+                    <Grid3X3 className="mr-2 h-5 w-5 text-primary" /> Seat Map:
                   </Label>
                   <SeatSelection
                     totalSeats={TOTAL_SEATS}
-                    bookedSeats={bookedSeatsForSelectedDate}
+                    bookedSeatDetails={bookedSeatDetailsMap}
                     selectedSeats={selectedSeats}
                     onSeatSelect={handleSeatSelect}
-                    disabled={!selectedDate || availableSeatsCount === 0 && selectedSeats.length === 0}
+                    onBookedSeatAction={handleBookedSeatAction}
+                    disabled={!selectedDate || (availableSeatsCount === 0 && selectedSeats.length === 0)}
                   />
                    {selectedSeats.length > 0 && (
                     <p className="text-xs text-muted-foreground mt-1 text-center">
-                      {selectedSeats.length} seat(s) selected on map. Booking quantity set to {selectedSeats.length}.
+                      {selectedSeats.length} seat(s) selected on map for new booking.
                     </p>
                   )}
+                   <p className="text-xs text-muted-foreground mt-1 text-center">
+                      Click available seat to select for new booking. Click booked seat for options.
+                    </p>
                 </div>
                 
                 <div className="relative">
@@ -376,14 +466,14 @@ export default function HomePage() {
                   </div>
                   <div className="relative flex justify-center text-xs uppercase">
                     <span className="bg-card px-2 text-muted-foreground">
-                      Or
+                      Or Book by Quantity
                     </span>
                   </div>
                 </div>
 
                 <div>
                   <Label htmlFor="quantity" className="text-base font-medium flex items-center mb-1">
-                    <Ticket className="mr-2 h-5 w-5 text-primary" /> Book by Quantity:
+                    <Ticket className="mr-2 h-5 w-5 text-primary" /> Number of Seats (for new booking):
                   </Label>
                   <div className="flex items-center gap-2">
                     <Button 
@@ -418,12 +508,12 @@ export default function HomePage() {
                   </div>
                   {selectedSeats.length === 0 && (parseInt(bookingQuantity, 10) || 0) > 0 && (
                      <p className="text-xs text-muted-foreground mt-1">
-                      Booking {bookingQuantity} seat(s) by quantity (auto-assigned).
+                      New booking for {bookingQuantity} seat(s) by quantity (auto-assigned).
                     </p>
                   )}
                    {selectedSeats.length > 0 && (
                      <p className="text-xs text-muted-foreground mt-1">
-                      Quantity input disabled when seats are selected on map.
+                      Quantity input disabled when seats are selected on map for new booking.
                     </p>
                   )}
                 </div>
@@ -431,9 +521,9 @@ export default function HomePage() {
             )}
             
             {selectedDate ? (
-              availableSeatsCount <= 0 && selectedSeats.length === 0 && ( // Show if no available seats AND no seats are somehow selected (edge case)
+              availableSeatsCount <= 0 && selectedSeats.length === 0 && ( 
                 <div className="text-center mt-6 py-10 text-lg font-semibold text-destructive-foreground bg-destructive/80 rounded-md p-4 shadow">
-                  Sorry, no seats available for this date.
+                  Sorry, no seats available for new bookings on this date.
                 </div>
               )
             ) : (
@@ -446,43 +536,72 @@ export default function HomePage() {
           {selectedDate && (
             <CardFooter className="flex flex-col items-stretch gap-4 pt-4 border-t">
               <div className="text-center">
-                <p className="text-sm text-muted-foreground">Seat Price: ${seatPriceForSelectedDate.toFixed(2)}</p>
+                <p className="text-sm text-muted-foreground">Default Seat Price for New Bookings: ${seatPriceForSelectedDate.toFixed(2)}</p>
                 <p className="text-lg font-semibold text-primary">
                   Est. Profit for {format(selectedDate, 'PPP')}: ${profitForSelectedDate.toFixed(2)}
                 </p>
                 <p className="text-xs text-muted-foreground">Based on {bookedSeatsForSelectedDate.length} booked seat(s).</p>
               </div>
               
-              {/* Show booking summary and button if seats can be booked */}
               {(availableSeatsCount > 0 || selectedSeats.length > 0) && (
                 <>
                   {displayQuantity > 0 && (
                     <div className="text-sm text-center text-primary font-medium p-2 bg-primary/10 rounded-md">
-                      Booking: {displayQuantity} seat{displayQuantity !== 1 ? 's' : ''}
+                      New Booking Summary: {displayQuantity} seat{displayQuantity !== 1 ? 's' : ''}
                       <br />
                       Total Cost: ${(displayQuantity * seatPriceForSelectedDate).toFixed(2)}
                     </div>
                   )}
                   <Button
-                    onClick={handleBooking}
+                    onClick={handleBooking} // This is for NEW bookings
                     disabled={displayQuantity === 0 || !userName.trim() || (availableSeatsCount === 0 && selectedSeats.length === 0)}
                     size="lg"
                     className="w-full text-lg font-semibold shadow-md hover:shadow-lg transition-shadow"
                   >
                     <CheckCircle2 className="mr-2 h-5 w-5" />
-                    Book {displayQuantity > 0 ? `${displayQuantity} Seat(s)` : 'Seats'}
+                    Confirm New Booking
                   </Button>
                 </>
               )}
                {availableSeatsCount <= 0 && selectedSeats.length === 0 && (
                  <div className="text-center py-2 text-lg font-semibold text-destructive-foreground bg-destructive/80 rounded-md p-4 shadow">
-                    No seats available to book for this date.
+                    No seats available for new bookings on this date.
                 </div>
                )}
             </CardFooter>
           )}
         </Card>
       </main>
+
+      {editSeatPriceState?.isOpen && (
+        <Dialog open={editSeatPriceState.isOpen} onOpenChange={() => setEditSeatPriceState(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Edit Price for Seat {editSeatPriceState.seatNumber}</DialogTitle>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <Label htmlFor="edit-seat-price">New Price ($)</Label>
+              <Input
+                id="edit-seat-price"
+                type="number"
+                value={editSeatPriceState.newPrice}
+                onChange={(e) => setEditSeatPriceState(s => s ? {...s, newPrice: e.target.value} : null)}
+                min="0"
+                step="0.01"
+              />
+               <p className="text-sm text-muted-foreground">
+                Original price: ${editSeatPriceState.currentPrice.toFixed(2)}
+              </p>
+            </div>
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button variant="outline" onClick={() => setEditSeatPriceState(null)}>Cancel</Button>
+              </DialogClose>
+              <Button onClick={handleConfirmEditSeatPrice}>Save Price</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
       <footer className="mt-12 text-center text-sm text-muted-foreground">
         <p>&copy; {new Date().getFullYear()} Kcrown Tickets. All rights reserved.</p>
