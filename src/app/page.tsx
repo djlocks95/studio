@@ -3,6 +3,7 @@
 
 import * as React from 'react';
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import Link from 'next/link';
 import { CustomCalendar } from '@/components/custom-calendar';
 import { SeatSelection } from '@/components/seat-selection';
 import { Button } from '@/components/ui/button';
@@ -14,7 +15,7 @@ import type { Booking, DailyPrice } from '@/lib/types';
 import { MOCK_BOOKINGS } from '@/data/mockBookings';
 import { MOCK_DAILY_PRICES } from '@/data/mockDailyPrices';
 import { addDays, format, isBefore, startOfDay } from 'date-fns';
-import { CalendarDays, CheckCircle2, Ticket, AlertTriangle, DollarSign } from 'lucide-react';
+import { CalendarDays, CheckCircle2, Ticket, AlertTriangle, DollarSign, User, BarChart3 } from 'lucide-react';
 
 const TOTAL_SEATS = 35;
 const DEFAULT_SEAT_PRICE = 25;
@@ -24,6 +25,7 @@ export default function HomePage() {
   const [currentBookings, setCurrentBookings] = useState<Booking[]>(MOCK_BOOKINGS);
   const [dailyPrices, setDailyPrices] = useState<DailyPrice[]>(MOCK_DAILY_PRICES);
   const [selectedSeats, setSelectedSeats] = useState<number[]>([]);
+  const [userName, setUserName] = useState<string>('');
   const [currentPriceInput, setCurrentPriceInput] = useState<string>(String(DEFAULT_SEAT_PRICE.toFixed(2)));
   const { toast } = useToast();
 
@@ -66,7 +68,6 @@ export default function HomePage() {
         variant: 'destructive',
         action: <AlertTriangle className="text-destructive-foreground" />,
       });
-      // Reset input to current price for the date if invalid
       setCurrentPriceInput(String(getSeatPriceForDate(selectedDate).toFixed(2)));
       return;
     }
@@ -104,12 +105,27 @@ export default function HomePage() {
       });
       return;
     }
+    if (!userName.trim()) {
+      toast({
+        title: 'User Name Required',
+        description: 'Please enter a name for the booking.',
+        variant: 'destructive',
+        action: <User className="text-destructive-foreground" />,
+      });
+      return;
+    }
+
+    const bookingSeatPrices = selectedSeats.reduce((acc, seatNum) => {
+      acc[seatNum] = seatPriceForSelectedDate;
+      return acc;
+    }, {} as { [seatNumber: number]: number });
 
     const newBooking: Booking = {
       id: `booking-${Date.now()}`,
       date: selectedDate,
       seats: selectedSeats,
-      userName: 'CurrentUser', 
+      userName: userName.trim(),
+      seatPrices: bookingSeatPrices,
     };
 
     setCurrentBookings(prevBookings => [...prevBookings, newBooking]);
@@ -117,11 +133,12 @@ export default function HomePage() {
     const totalCost = selectedSeats.length * seatPriceForSelectedDate;
     toast({
       title: 'Booking Confirmed!',
-      description: `You've booked ${selectedSeats.length} seat(s) for ${format(selectedDate, 'PPP')}. Total cost: $${totalCost.toFixed(2)}.`,
+      description: `${userName.trim()} booked ${selectedSeats.length} seat(s) for ${format(selectedDate, 'PPP')}. Total cost: $${totalCost.toFixed(2)}.`,
       action: <CheckCircle2 className="text-green-500" />,
     });
 
     setSelectedSeats([]);
+    setUserName(''); // Reset user name after booking
   };
 
   const bookedSeatsForSelectedDate = useMemo(() => {
@@ -135,21 +152,39 @@ export default function HomePage() {
   const availableSeatsCount = TOTAL_SEATS - bookedSeatsForSelectedDate.length;
 
   const profitForSelectedDate = useMemo(() => {
-    return bookedSeatsForSelectedDate.length * seatPriceForSelectedDate;
-  }, [bookedSeatsForSelectedDate, seatPriceForSelectedDate]);
+    if (!selectedDate) return 0;
+    const startOfSelected = startOfDay(selectedDate);
+    return currentBookings
+      .filter(booking => startOfDay(booking.date).getTime() === startOfSelected.getTime())
+      .reduce((totalProfit, booking) => {
+        if (booking.seatPrices) {
+          return totalProfit + Object.values(booking.seatPrices).reduce((sum, price) => sum + price, 0);
+        }
+        // Fallback for older data without seatPrices
+        return totalProfit + (booking.seats.length * getSeatPriceForDate(booking.date));
+      }, 0);
+  }, [selectedDate, currentBookings, getSeatPriceForDate]);
 
   const disablePastDates = (date: Date) => isBefore(date, startOfDay(new Date()));
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background to-secondary/50 py-8 px-4 flex flex-col items-center">
-      <header className="mb-10 text-center">
-        <div className="flex items-center justify-center mb-2">
-          <Ticket className="w-12 h-12 text-primary mr-3" />
-          <h1 className="text-4xl md:text-5xl font-bold text-primary tracking-tight">
-            Kcrown Tickets
-          </h1>
+      <header className="mb-10 text-center w-full max-w-4xl">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center">
+            <Ticket className="w-12 h-12 text-primary mr-3" />
+            <h1 className="text-4xl md:text-5xl font-bold text-primary tracking-tight">
+              Kcrown Tickets
+            </h1>
+          </div>
+          <Link href="/profits" passHref>
+            <Button variant="outline" className="shadow-md">
+              <BarChart3 className="mr-2 h-5 w-5" />
+              View Profits
+            </Button>
+          </Link>
         </div>
-        <p className="text-lg text-muted-foreground">
+        <p className="text-lg text-muted-foreground mt-2">
           Your Premier Party Bus Booking Experience!
         </p>
       </header>
@@ -213,8 +248,24 @@ export default function HomePage() {
             )}
           </CardHeader>
           <CardContent>
+            {selectedDate && (
+              <div className="mb-4">
+                <Label htmlFor="userName" className="text-base font-medium flex items-center mb-1">
+                  <User className="mr-2 h-5 w-5 text-primary" /> Booking Name:
+                </Label>
+                <Input
+                  id="userName"
+                  type="text"
+                  placeholder="Enter name for booking"
+                  value={userName}
+                  onChange={(e) => setUserName(e.target.value)}
+                  className="w-full rounded-md shadow-sm"
+                  aria-label="Booking name"
+                />
+              </div>
+            )}
             {selectedDate ? (
-              availableSeatsCount > 0 || selectedSeats.length > 0 ? ( // Show seats if any available OR if seats were selected before price change made them unavailable
+              availableSeatsCount > 0 || selectedSeats.length > 0 ? (
                 <SeatSelection
                   totalSeats={TOTAL_SEATS}
                   bookedSeatsForDate={bookedSeatsForSelectedDate}
@@ -254,7 +305,7 @@ export default function HomePage() {
                   )}
                   <Button
                     onClick={handleBooking}
-                    disabled={selectedSeats.length === 0}
+                    disabled={selectedSeats.length === 0 || !userName.trim()}
                     size="lg"
                     className="w-full text-lg font-semibold shadow-md hover:shadow-lg transition-shadow"
                   >
@@ -263,7 +314,6 @@ export default function HomePage() {
                   </Button>
                 </>
               )}
-              {/* Show this message if seats were selected but then became unavailable due to other bookings */}
                {availableSeatsCount <= 0 && selectedSeats.length === 0 && !bookedSeatsForSelectedDate.some(bs => selectedSeats.includes(bs)) && (
                  <div className="text-center py-2 text-lg font-semibold text-destructive-foreground bg-destructive/80 rounded-md p-4 shadow">
                     No seats available to book for this date.
