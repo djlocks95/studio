@@ -15,7 +15,7 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogClose } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { format, startOfDay } from 'date-fns';
-import { ArrowLeft, BarChart3, CalendarDays, TrendingUp, Users, Percent, PlusCircle, Edit, Trash2, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, BarChart3, CalendarDays, TrendingUp, Users, Percent, PlusCircle, Edit, Trash2, AlertTriangle, CheckCircle2, DollarSign } from 'lucide-react';
 
 const DEFAULT_SEAT_PRICE = 25;
 
@@ -33,6 +33,12 @@ interface MonthlyProfitMetrics {
   bookedSeats: number;
   commissionPaid: number;
   netProfit: number;
+}
+
+interface AgentPayout {
+  agentId: string;
+  agentName: string;
+  totalCommission: number;
 }
 
 export default function ProfitsPage() {
@@ -57,7 +63,7 @@ export default function ProfitsPage() {
     return specificPriceEntry ? specificPriceEntry.price : DEFAULT_SEAT_PRICE;
   }, [dailyPricesData]);
 
-  const calculateTotalCommission = React.useCallback((profitAmount: number, agents: CommissionAgent[]): number => {
+  const calculateTotalCommissionForAmount = React.useCallback((profitAmount: number, agents: CommissionAgent[]): number => {
     return agents.reduce((totalComm, agent) => {
       return totalComm + (profitAmount * (agent.percentage / 100));
     }, 0);
@@ -85,7 +91,7 @@ export default function ProfitsPage() {
 
     const sortedDailyProfits: DailyProfitMetrics[] = Array.from(profitsMap.entries())
       .map(([date, data]) => {
-        const commissionPaid = calculateTotalCommission(data.grossProfit, commissionAgents);
+        const commissionPaid = calculateTotalCommissionForAmount(data.grossProfit, commissionAgents);
         const netProfit = data.grossProfit - commissionPaid;
         return { 
           date, 
@@ -98,7 +104,7 @@ export default function ProfitsPage() {
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     return sortedDailyProfits;
-  }, [bookings, getSeatPriceForDate, commissionAgents, calculateTotalCommission]);
+  }, [bookings, getSeatPriceForDate, commissionAgents, calculateTotalCommissionForAmount]);
 
   const monthlyProfits = React.useMemo(() => {
     const profitsMap = new Map<string, { grossProfit: number; bookedSeats: number; commissionPaid: number; netProfit: number }>();
@@ -130,6 +136,24 @@ export default function ProfitsPage() {
 
     return sortedMonthlyProfits;
   }, [dailyProfits]);
+
+  const agentPayouts = React.useMemo(() => {
+    const payoutsMap = new Map<string, number>();
+    
+    dailyProfits.forEach(daily => {
+      commissionAgents.forEach(agent => {
+        const agentCommissionForDay = daily.grossProfit * (agent.percentage / 100);
+        payoutsMap.set(agent.id, (payoutsMap.get(agent.id) || 0) + agentCommissionForDay);
+      });
+    });
+
+    return commissionAgents.map(agent => ({
+      agentId: agent.id,
+      agentName: agent.name,
+      totalCommission: payoutsMap.get(agent.id) || 0,
+    })).sort((a,b) => b.totalCommission - a.totalCommission);
+  }, [dailyProfits, commissionAgents]);
+
 
   const handleAddAgent = () => {
     const percentageVal = parseFloat(newAgentPercentage);
@@ -298,6 +322,38 @@ export default function ProfitsPage() {
         <Card className="shadow-xl">
           <CardHeader>
             <CardTitle className="flex items-center text-2xl">
+              <DollarSign className="mr-2 text-primary h-7 w-7" />
+              Agent Payouts
+            </CardTitle>
+            <CardDescription>Total commission earned by each agent across all bookings.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {agentPayouts.length > 0 ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Agent Name</TableHead>
+                    <TableHead className="text-right">Total Commission Payout</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {agentPayouts.map(payout => (
+                    <TableRow key={payout.agentId}>
+                      <TableCell className="font-medium">{payout.agentName}</TableCell>
+                      <TableCell className="text-right font-semibold">${payout.totalCommission.toFixed(2)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <p className="text-muted-foreground text-center py-4">No commission payouts to display. Add agents or bookings.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="shadow-xl">
+          <CardHeader>
+            <CardTitle className="flex items-center text-2xl">
               <CalendarDays className="mr-2 text-primary" />
               Daily Profits
             </CardTitle>
@@ -420,3 +476,4 @@ export default function ProfitsPage() {
       </footer>
     </div>
   );
+}
