@@ -5,8 +5,7 @@ import * as React from 'react';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { CustomCalendar } from '@/components/custom-calendar';
-// SeatSelection component is removed as per new booking flow
-// import { SeatSelection } from '@/components/seat-selection'; 
+import { SeatSelection } from '@/components/seat-selection'; 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -16,7 +15,7 @@ import type { Booking, DailyPrice } from '@/lib/types';
 import { MOCK_BOOKINGS } from '@/data/mockBookings';
 import { MOCK_DAILY_PRICES } from '@/data/mockDailyPrices';
 import { addDays, format, isBefore, startOfDay } from 'date-fns';
-import { CalendarDays, CheckCircle2, Ticket, AlertTriangle, DollarSign, User, BarChart3, MinusCircle, PlusCircle, BoxSelect } from 'lucide-react';
+import { CalendarDays, CheckCircle2, Ticket, AlertTriangle, DollarSign, User, BarChart3, MinusCircle, PlusCircle, BoxSelect, Grid3X3 } from 'lucide-react';
 
 const TOTAL_SEATS = 35;
 const DEFAULT_SEAT_PRICE = 25;
@@ -25,8 +24,7 @@ export default function HomePage() {
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
   const [currentBookings, setCurrentBookings] = useState<Booking[]>(MOCK_BOOKINGS);
   const [dailyPrices, setDailyPrices] = useState<DailyPrice[]>(MOCK_DAILY_PRICES);
-  // selectedSeats state is removed as per new booking flow
-  // const [selectedSeats, setSelectedSeats] = useState<number[]>([]); 
+  const [selectedSeats, setSelectedSeats] = useState<number[]>([]); 
   const [userName, setUserName] = useState<string>('');
   const [bookingQuantity, setBookingQuantity] = useState<string>('1');
   const [currentPriceInput, setCurrentPriceInput] = useState<string>(String(DEFAULT_SEAT_PRICE.toFixed(2)));
@@ -48,14 +46,46 @@ export default function HomePage() {
     }
   }, [selectedDate, getSeatPriceForDate]);
 
+  // Update bookingQuantity when selectedSeats change
+  useEffect(() => {
+    if (selectedSeats.length > 0) {
+      setBookingQuantity(String(selectedSeats.length));
+    }
+    // If selectedSeats becomes empty, bookingQuantity retains its last value from quantity input
+    // or defaults to '1' if it was also driven by selectedSeats.
+    // User can then adjust quantity input if they clear seat map selection.
+    else if (selectedSeats.length === 0 && bookingQuantity !== '1' && parseInt(bookingQuantity,10) === 0 ) {
+        // if the quantity was set to 0 by clearing selected seats, set it to 1
+        setBookingQuantity('1');
+    }
+  }, [selectedSeats, bookingQuantity]);
+
+
   const handleDateSelect = (date: Date | undefined) => {
     setSelectedDate(date);
-    // setSelectedSeats([]); // No longer needed
-    setBookingQuantity('1'); // Reset quantity on new date selection
+    setSelectedSeats([]); 
+    setBookingQuantity('1'); 
   };
 
-  // handleSeatSelect is removed as per new booking flow
-  // const handleSeatSelect = (seatNumber: number) => { ... };
+  const handleSeatSelect = (seatNumber: number) => {
+    if (!selectedDate) return;
+    if (bookedSeatsForSelectedDate.includes(seatNumber)) {
+        toast({ title: "Seat Booked", description: "This seat is already booked.", variant: "destructive", action: <AlertTriangle className="text-destructive-foreground" /> });
+        return;
+    }
+
+    setSelectedSeats(prevSelectedSeats => {
+      const newSelectedSeats = prevSelectedSeats.includes(seatNumber)
+        ? prevSelectedSeats.filter(s => s !== seatNumber)
+        : [...prevSelectedSeats, seatNumber];
+      
+      // If no seats are selected via map, default quantity input to '1' to enable quantity booking mode.
+      // Otherwise, quantity is driven by map selection.
+      setBookingQuantity(String(newSelectedSeats.length > 0 ? newSelectedSeats.length : 1));
+      return newSelectedSeats;
+    });
+  };
+
 
   const handleSetPriceForSelectedDate = () => {
     if (!selectedDate) return;
@@ -105,52 +135,50 @@ export default function HomePage() {
   const availableSeatsCount = TOTAL_SEATS - bookedSeatsForSelectedDate.length;
 
   const handleBooking = () => {
-    const quantity = parseInt(bookingQuantity, 10);
-
-    if (!selectedDate || quantity <= 0) {
-      toast({
-        title: 'Booking Incomplete',
-        description: 'Please select a date and enter a valid quantity of seats.',
-        variant: 'destructive',
-        action: <AlertTriangle className="text-destructive-foreground" />,
-      });
+    if (!selectedDate) {
+      toast({ title: 'Booking Incomplete', description: 'Please select a date.', variant: 'destructive', action: <AlertTriangle className="text-destructive-foreground" /> });
       return;
     }
     if (!userName.trim()) {
-      toast({
-        title: 'User Name Required',
-        description: 'Please enter a name for the booking.',
-        variant: 'destructive',
-        action: <User className="text-destructive-foreground" />,
-      });
-      return;
-    }
-    if (isNaN(quantity) || quantity <= 0) {
-      toast({
-        title: 'Invalid Quantity',
-        description: 'Please enter a valid number of seats to book.',
-        variant: 'destructive',
-        action: <AlertTriangle className="text-destructive-foreground" />,
-      });
+      toast({ title: 'User Name Required', description: 'Please enter a name for the booking.', variant: 'destructive', action: <User className="text-destructive-foreground" /> });
       return;
     }
 
-    const allSeatNumbers = Array.from({ length: TOTAL_SEATS }, (_, i) => i + 1);
-    const currentlyAvailableSeatNumbers = allSeatNumbers.filter(
-      seatNum => !bookedSeatsForSelectedDate.includes(seatNum)
-    );
+    let seatsToBook: number[];
+    let quantityBooked: number;
 
-    if (quantity > currentlyAvailableSeatNumbers.length) {
-      toast({
-        title: 'Not Enough Seats',
-        description: `Only ${currentlyAvailableSeatNumbers.length} seat(s) available, but ${quantity} were requested.`,
-        variant: 'destructive',
-        action: <AlertTriangle className="text-destructive-foreground" />,
-      });
-      return;
+    if (selectedSeats.length > 0) {
+      // Ensure all selected seats are actually available (double-check against bookedSeatsForSelectedDate)
+      const stillAvailableSelectedSeats = selectedSeats.filter(s => !bookedSeatsForSelectedDate.includes(s));
+      if (stillAvailableSelectedSeats.length !== selectedSeats.length) {
+        toast({ title: 'Seat Conflict', description: 'Some selected seats were booked by another user. Please re-select.', variant: 'destructive', action: <AlertTriangle className="text-destructive-foreground" /> });
+        setSelectedSeats(stillAvailableSelectedSeats); // Update UI to show only valid selections
+        setBookingQuantity(String(stillAvailableSelectedSeats.length || 1));
+        return;
+      }
+      seatsToBook = [...stillAvailableSelectedSeats];
+      quantityBooked = seatsToBook.length;
+      if (quantityBooked === 0) {
+        toast({ title: 'No Seats Selected', description: 'Please select seats on the map or enter a quantity.', variant: 'destructive', action: <AlertTriangle className="text-destructive-foreground" /> });
+        return;
+      }
+    } else {
+      const quantityFromInput = parseInt(bookingQuantity, 10);
+      if (isNaN(quantityFromInput) || quantityFromInput <= 0) {
+        toast({ title: 'Invalid Quantity', description: 'Please enter a valid number of seats to book or select them on the map.', variant: 'destructive', action: <AlertTriangle className="text-destructive-foreground" /> });
+        return;
+      }
+      quantityBooked = quantityFromInput;
+      const allSeatNumbers = Array.from({ length: TOTAL_SEATS }, (_, i) => i + 1);
+      const currentlyAvailableSeatNumbers = allSeatNumbers.filter(
+        seatNum => !bookedSeatsForSelectedDate.includes(seatNum)
+      );
+      if (quantityBooked > currentlyAvailableSeatNumbers.length) {
+        toast({ title: 'Not Enough Seats', description: `Only ${currentlyAvailableSeatNumbers.length} seat(s) available for auto-assignment, but ${quantityBooked} were requested.`, variant: 'destructive', action: <AlertTriangle className="text-destructive-foreground" /> });
+        return;
+      }
+      seatsToBook = currentlyAvailableSeatNumbers.slice(0, quantityBooked);
     }
-
-    const seatsToBook = currentlyAvailableSeatNumbers.slice(0, quantity);
 
     const bookingSeatPrices = seatsToBook.reduce((acc, seatNum) => {
       acc[seatNum] = seatPriceForSelectedDate;
@@ -167,14 +195,14 @@ export default function HomePage() {
 
     setCurrentBookings(prevBookings => [...prevBookings, newBooking]);
     
-    const totalCost = quantity * seatPriceForSelectedDate;
+    const totalCost = quantityBooked * seatPriceForSelectedDate;
     toast({
       title: 'Booking Confirmed!',
-      description: `${userName.trim()} booked ${quantity} seat(s) for ${format(selectedDate, 'PPP')}. Total cost: $${totalCost.toFixed(2)}. Seats: ${seatsToBook.join(', ')}.`,
+      description: `${userName.trim()} booked ${quantityBooked} seat(s) for ${format(selectedDate, 'PPP')}. Total cost: $${totalCost.toFixed(2)}. Seats: ${seatsToBook.join(', ')}.`,
       action: <CheckCircle2 className="text-green-500" />,
     });
 
-    // setSelectedSeats([]); // No longer needed
+    setSelectedSeats([]); 
     setUserName(''); 
     setBookingQuantity('1'); 
   };
@@ -188,24 +216,27 @@ export default function HomePage() {
         if (booking.seatPrices) {
           return totalProfit + Object.values(booking.seatPrices).reduce((sum, price) => sum + price, 0);
         }
+        // Fallback if seatPrices is somehow missing (should not happen with new logic)
         return totalProfit + (booking.seats.length * getSeatPriceForDate(booking.date));
       }, 0);
   }, [selectedDate, currentBookings, getSeatPriceForDate]);
 
   const disablePastDates = (date: Date) => isBefore(date, startOfDay(new Date()));
 
-  const handleQuantityChange = (value: string) => {
+  const handleQuantityInputChange = (value: string) => {
+    setSelectedSeats([]); // Clear map selection if quantity input is directly used
     const numValue = parseInt(value, 10);
-    if (value === '' || (numValue > 0 && numValue <= availableSeatsCount)) {
-      setBookingQuantity(value);
-    } else if (numValue > availableSeatsCount) {
-      setBookingQuantity(String(availableSeatsCount));
-    } else if (numValue <= 0 && value !== '') {
-       setBookingQuantity('1');
+    if (value === '') {
+      setBookingQuantity(''); // Allow empty for typing
+    } else if (!isNaN(numValue)) {
+      if (numValue <= 0) setBookingQuantity('1'); // Min 1 if has value
+      else if (numValue > availableSeatsCount) setBookingQuantity(String(availableSeatsCount));
+      else setBookingQuantity(String(numValue));
     }
   };
 
   const incrementQuantity = () => {
+    setSelectedSeats([]); // Clear map selection
     const currentQuantity = parseInt(bookingQuantity, 10) || 0;
     if (currentQuantity < availableSeatsCount) {
       setBookingQuantity(String(currentQuantity + 1));
@@ -213,13 +244,14 @@ export default function HomePage() {
   };
 
   const decrementQuantity = () => {
+    setSelectedSeats([]); // Clear map selection
     const currentQuantity = parseInt(bookingQuantity, 10) || 0;
     if (currentQuantity > 1) {
       setBookingQuantity(String(currentQuantity - 1));
     }
   };
-
-  const currentBookingQuantity = parseInt(bookingQuantity, 10) || 0;
+  
+  const displayQuantity = selectedSeats.length > 0 ? selectedSeats.length : (parseInt(bookingQuantity, 10) || 0);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background to-secondary/50 py-8 px-4 flex flex-col items-center">
@@ -304,7 +336,7 @@ export default function HomePage() {
           </CardHeader>
           <CardContent>
             {selectedDate && (
-              <div className="space-y-4">
+              <div className="space-y-6">
                 <div>
                   <Label htmlFor="userName" className="text-base font-medium flex items-center mb-1">
                     <User className="mr-2 h-5 w-5 text-primary" /> Booking Name:
@@ -319,35 +351,87 @@ export default function HomePage() {
                     aria-label="Booking name"
                   />
                 </div>
+
+                <div>
+                  <Label className="text-base font-medium flex items-center mb-2">
+                    <Grid3X3 className="mr-2 h-5 w-5 text-primary" /> Select Seats on Map:
+                  </Label>
+                  <SeatSelection
+                    totalSeats={TOTAL_SEATS}
+                    bookedSeats={bookedSeatsForSelectedDate}
+                    selectedSeats={selectedSeats}
+                    onSeatSelect={handleSeatSelect}
+                    disabled={!selectedDate || availableSeatsCount === 0 && selectedSeats.length === 0}
+                  />
+                   {selectedSeats.length > 0 && (
+                    <p className="text-xs text-muted-foreground mt-1 text-center">
+                      {selectedSeats.length} seat(s) selected on map. Booking quantity set to {selectedSeats.length}.
+                    </p>
+                  )}
+                </div>
+                
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-card px-2 text-muted-foreground">
+                      Or
+                    </span>
+                  </div>
+                </div>
+
                 <div>
                   <Label htmlFor="quantity" className="text-base font-medium flex items-center mb-1">
-                    <Ticket className="mr-2 h-5 w-5 text-primary" /> Quantity:
+                    <Ticket className="mr-2 h-5 w-5 text-primary" /> Book by Quantity:
                   </Label>
                   <div className="flex items-center gap-2">
-                    <Button variant="outline" size="icon" onClick={decrementQuantity} disabled={currentBookingQuantity <= 1 || availableSeatsCount === 0}>
+                    <Button 
+                      variant="outline" 
+                      size="icon" 
+                      onClick={decrementQuantity} 
+                      disabled={(parseInt(bookingQuantity, 10) || 0) <= 1 || availableSeatsCount === 0 || selectedSeats.length > 0}
+                      aria-label="Decrement seat quantity"
+                    >
                       <MinusCircle className="h-5 w-5" />
                     </Button>
                     <Input
                       id="quantity"
                       type="number"
                       value={bookingQuantity}
-                      onChange={(e) => handleQuantityChange(e.target.value)}
+                      onChange={(e) => handleQuantityInputChange(e.target.value)}
                       className="w-20 text-center rounded-md shadow-sm"
                       min="1"
-                      max={availableSeatsCount > 0 ? availableSeatsCount : 1} // Prevent error if availableSeatsCount is 0
-                      disabled={availableSeatsCount === 0}
-                      aria-label="Number of seats to book"
+                      max={availableSeatsCount > 0 ? availableSeatsCount : 1} 
+                      disabled={availableSeatsCount === 0 || selectedSeats.length > 0}
+                      aria-label="Number of seats to book by quantity"
                     />
-                    <Button variant="outline" size="icon" onClick={incrementQuantity} disabled={currentBookingQuantity >= availableSeatsCount || availableSeatsCount === 0}>
+                    <Button 
+                      variant="outline" 
+                      size="icon" 
+                      onClick={incrementQuantity} 
+                      disabled={(parseInt(bookingQuantity, 10) || 0) >= availableSeatsCount || availableSeatsCount === 0 || selectedSeats.length > 0}
+                      aria-label="Increment seat quantity"
+                    >
                       <PlusCircle className="h-5 w-5" />
                     </Button>
                   </div>
+                  {selectedSeats.length === 0 && (parseInt(bookingQuantity, 10) || 0) > 0 && (
+                     <p className="text-xs text-muted-foreground mt-1">
+                      Booking {bookingQuantity} seat(s) by quantity (auto-assigned).
+                    </p>
+                  )}
+                   {selectedSeats.length > 0 && (
+                     <p className="text-xs text-muted-foreground mt-1">
+                      Quantity input disabled when seats are selected on map.
+                    </p>
+                  )}
                 </div>
               </div>
             )}
             
             {selectedDate ? (
-              availableSeatsCount <= 0 && (
+              availableSeatsCount <= 0 && selectedSeats.length === 0 && ( // Show if no available seats AND no seats are somehow selected (edge case)
                 <div className="text-center mt-6 py-10 text-lg font-semibold text-destructive-foreground bg-destructive/80 rounded-md p-4 shadow">
                   Sorry, no seats available for this date.
                 </div>
@@ -368,28 +452,29 @@ export default function HomePage() {
                 </p>
                 <p className="text-xs text-muted-foreground">Based on {bookedSeatsForSelectedDate.length} booked seat(s).</p>
               </div>
-
-              {availableSeatsCount > 0 && (
+              
+              {/* Show booking summary and button if seats can be booked */}
+              {(availableSeatsCount > 0 || selectedSeats.length > 0) && (
                 <>
-                  {currentBookingQuantity > 0 && (
+                  {displayQuantity > 0 && (
                     <div className="text-sm text-center text-primary font-medium p-2 bg-primary/10 rounded-md">
-                      Booking: {currentBookingQuantity} seat{currentBookingQuantity !== 1 ? 's' : ''}
+                      Booking: {displayQuantity} seat{displayQuantity !== 1 ? 's' : ''}
                       <br />
-                      Total Cost: ${(currentBookingQuantity * seatPriceForSelectedDate).toFixed(2)}
+                      Total Cost: ${(displayQuantity * seatPriceForSelectedDate).toFixed(2)}
                     </div>
                   )}
                   <Button
                     onClick={handleBooking}
-                    disabled={currentBookingQuantity === 0 || !userName.trim() || availableSeatsCount === 0}
+                    disabled={displayQuantity === 0 || !userName.trim() || (availableSeatsCount === 0 && selectedSeats.length === 0)}
                     size="lg"
                     className="w-full text-lg font-semibold shadow-md hover:shadow-lg transition-shadow"
                   >
                     <CheckCircle2 className="mr-2 h-5 w-5" />
-                    Book {currentBookingQuantity > 0 ? `${currentBookingQuantity} Seat(s)` : 'Seats'}
+                    Book {displayQuantity > 0 ? `${displayQuantity} Seat(s)` : 'Seats'}
                   </Button>
                 </>
               )}
-               {availableSeatsCount <= 0 && (
+               {availableSeatsCount <= 0 && selectedSeats.length === 0 && (
                  <div className="text-center py-2 text-lg font-semibold text-destructive-foreground bg-destructive/80 rounded-md p-4 shadow">
                     No seats available to book for this date.
                 </div>
