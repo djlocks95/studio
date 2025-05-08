@@ -1,3 +1,4 @@
+
 export interface Booking {
   id: string;
   date: Date; // Store as Date object for client-side, convert to string for DB
@@ -10,4 +11,9 @@ export interface Seat {
   isBooked: boolean;
   isSelected: boolean;
   isAvailable: boolean;
+}
+
+export interface DailyPrice {
+  date: Date;
+  price: number;
 }
