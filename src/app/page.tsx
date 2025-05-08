@@ -4,28 +4,42 @@
 import * as React from 'react';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
+import { db } from '@/lib/firebase';
+import { ref, onValue, set, update, remove } from 'firebase/database';
 import { CustomCalendar } from '@/components/custom-calendar';
-import { SeatSelection } from '@/components/seat-selection'; 
+import { SeatSelection } from '@/components/seat-selection';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import type { Booking, DailyPrice, BookedSeatDetail } from '@/lib/types';
-import { MOCK_BOOKINGS } from '@/data/mockBookings';
-import { MOCK_DAILY_PRICES } from '@/data/mockDailyPrices';
-import { addDays, format, isBefore, startOfDay } from 'date-fns';
-import { CalendarDays, CheckCircle2, Ticket, AlertTriangle, DollarSign, User, BarChart3, MinusCircle, PlusCircle, BoxSelect, Grid3X3, Pencil, Trash2 } from 'lucide-react';
+import type { Booking, DailyPrice, BookedSeatDetail, FirebaseBooking } from '@/lib/types';
+import { addDays, format, isBefore, startOfDay, parseISO } from 'date-fns';
+import { CalendarDays, CheckCircle2, Ticket, AlertTriangle, DollarSign, User, BarChart3, MinusCircle, PlusCircle, BoxSelect, Grid3X3, Pencil, Trash2, Loader2 } from 'lucide-react';
 
 const TOTAL_SEATS = 35;
 const DEFAULT_SEAT_PRICE = 25;
 
+// Helper functions for data conversion
+const toFirebaseBooking = (booking: Booking): FirebaseBooking => ({
+  ...booking,
+  date: booking.date.toISOString(),
+  seatPrices: booking.seatPrices ? Object.fromEntries(Object.entries(booking.seatPrices).map(([key, value]) => [String(key), value])) : undefined,
+});
+
+const fromFirebaseBooking = (fbBooking: FirebaseBooking): Booking => ({
+  ...fbBooking,
+  date: parseISO(fbBooking.date),
+  seatPrices: fbBooking.seatPrices ? Object.fromEntries(Object.entries(fbBooking.seatPrices).map(([key, value]) => [Number(key), value])) : undefined,
+});
+
+
 export default function HomePage() {
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
-  const [currentBookings, setCurrentBookings] = useState<Booking[]>(MOCK_BOOKINGS);
-  const [dailyPrices, setDailyPrices] = useState<DailyPrice[]>(MOCK_DAILY_PRICES);
-  const [selectedSeats, setSelectedSeats] = useState<number[]>([]); 
+  const [currentBookings, setCurrentBookings] = useState<Booking[]>([]);
+  const [dailyPrices, setDailyPrices] = useState<DailyPrice[]>([]);
+  const [selectedSeats, setSelectedSeats] = useState<number[]>([]);
   const [userName, setUserName] = useState<string>('');
   const [bookingQuantity, setBookingQuantity] = useState<string>('1');
   const [currentPriceInput, setCurrentPriceInput] = useState<string>(String(DEFAULT_SEAT_PRICE.toFixed(2)));
@@ -38,7 +52,58 @@ export default function HomePage() {
     newPrice: string;
   } | null>(null);
 
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
   const { toast } = useToast();
+
+  // Fetch initial data from Firebase
+  useEffect(() => {
+    setIsLoading(true);
+    const bookingsRef = ref(db, 'bookings');
+    const dailyPricesRef = ref(db, 'dailyPrices');
+
+    const unsubscribeBookings = onValue(bookingsRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const fetchedBookings: Booking[] = Object.values(data as { [key: string]: FirebaseBooking }).map(fromFirebaseBooking);
+        setCurrentBookings(fetchedBookings);
+      } else {
+        setCurrentBookings([]);
+      }
+      setError(null);
+    }, (err) => {
+      console.error("Firebase bookings fetch error:", err);
+      setError("Failed to load bookings.");
+      toast({ title: "Error", description: "Could not fetch bookings from database.", variant: "destructive" });
+    });
+
+    const unsubscribeDailyPrices = onValue(dailyPricesRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const fetchedPrices: DailyPrice[] = Object.entries(data as { [key: string]: FirebaseDailyPrice['price'] }).map(([dateStr, price]) => ({
+          date: parseISO(dateStr), // Assuming dateStr is YYYY-MM-DD, convert to full Date object
+          price: price,
+        }));
+        setDailyPrices(fetchedPrices);
+      } else {
+        setDailyPrices([]);
+      }
+      setError(null);
+    }, (err) => {
+      console.error("Firebase daily prices fetch error:", err);
+      setError("Failed to load daily prices.");
+      toast({ title: "Error", description: "Could not fetch daily prices from database.", variant: "destructive" });
+    });
+    
+    setIsLoading(false); // Set loading to false after subscriptions are set up
+
+    return () => {
+      unsubscribeBookings();
+      unsubscribeDailyPrices();
+    };
+  }, [toast]);
+
 
   const getSeatPriceForDate = useCallback((date: Date): number => {
     const specificPriceEntry = dailyPrices.find(
@@ -68,8 +133,8 @@ export default function HomePage() {
 
   const handleDateSelect = (date: Date | undefined) => {
     setSelectedDate(date);
-    setSelectedSeats([]); 
-    setBookingQuantity('1'); 
+    setSelectedSeats([]);
+    setBookingQuantity('1');
   };
 
   const bookedSeatDetailsMap = useMemo(() => {
@@ -92,7 +157,7 @@ export default function HomePage() {
   }, [selectedDate, currentBookings, getSeatPriceForDate]);
 
 
-  const handleSeatSelect = (seatNumber: number) => { // For selecting available seats
+  const handleSeatSelect = (seatNumber: number) => {
     if (!selectedDate || bookedSeatDetailsMap.has(seatNumber)) return;
 
     setSelectedSeats(prevSelectedSeats => {
@@ -117,7 +182,7 @@ export default function HomePage() {
     });
   };
 
-  const handleConfirmEditSeatPrice = () => {
+  const handleConfirmEditSeatPrice = async () => {
     if (!editSeatPriceState) return;
     const { bookingId, seatNumber, newPrice } = editSeatPriceState;
     const parsedNewPrice = parseFloat(newPrice);
@@ -127,55 +192,61 @@ export default function HomePage() {
       return;
     }
 
-    setCurrentBookings(prevBookings =>
-      prevBookings.map(booking => {
-        if (booking.id === bookingId && booking.seatPrices) {
-          return {
-            ...booking,
-            seatPrices: {
-              ...booking.seatPrices,
-              [seatNumber]: parsedNewPrice,
-            },
-          };
-        }
-        return booking;
-      })
-    );
+    const bookingToUpdate = currentBookings.find(b => b.id === bookingId);
+    if (!bookingToUpdate) {
+        toast({ title: "Error", description: "Booking not found.", variant: "destructive" });
+        return;
+    }
 
-    toast({ title: "Price Updated", description: `Price for seat ${seatNumber} updated to $${parsedNewPrice.toFixed(2)}.`, action: <CheckCircle2 className="text-green-500" /> });
-    setEditSeatPriceState(null);
+    const updatedSeatPrices = {
+        ...(bookingToUpdate.seatPrices || {}),
+        [seatNumber]: parsedNewPrice,
+    };
+    
+    try {
+      await update(ref(db, `bookings/${bookingId}`), { seatPrices: updatedSeatPrices });
+      toast({ title: "Price Updated", description: `Price for seat ${seatNumber} updated to $${parsedNewPrice.toFixed(2)}.`, action: <CheckCircle2 className="text-green-500" /> });
+      setEditSeatPriceState(null);
+    } catch (e) {
+      console.error("Firebase update error:", e);
+      toast({ title: "Error", description: "Failed to update price in database.", variant: "destructive" });
+    }
   };
   
-  const handleUnbookSeat = (bookingId: string, seatNumber: number) => {
-    setCurrentBookings(prevBookings => {
-      const updatedBookings = prevBookings.map(booking => {
-        if (booking.id === bookingId) {
-          const newSeats = booking.seats.filter(s => s !== seatNumber);
-          const newSeatPrices = { ...booking.seatPrices };
-          if (newSeatPrices) delete newSeatPrices[seatNumber];
-          
-          if (newSeats.length === 0) return null; // Mark for removal if no seats left
-          
-          return { ...booking, seats: newSeats, seatPrices: newSeatPrices };
+  const handleUnbookSeat = async (bookingId: string, seatNumber: number) => {
+    const bookingToUpdate = currentBookings.find(b => b.id === bookingId);
+    if (!bookingToUpdate) {
+        toast({ title: "Error", description: "Booking not found.", variant: "destructive" });
+        return;
+    }
+
+    const newSeats = bookingToUpdate.seats.filter(s => s !== seatNumber);
+    const newSeatPrices = { ...bookingToUpdate.seatPrices };
+    if (newSeatPrices) delete newSeatPrices[seatNumber];
+
+    try {
+        if (newSeats.length === 0) {
+            await remove(ref(db, `bookings/${bookingId}`));
+        } else {
+            await update(ref(db, `bookings/${bookingId}`), { seats: newSeats, seatPrices: newSeatPrices });
         }
-        return booking;
-      }).filter(Boolean) as Booking[]; // Filter out null (removed) bookings
-      return updatedBookings;
-    });
-    toast({ title: "Seat Unbooked", description: `Seat ${seatNumber} has been unbooked.`, action: <Trash2 className="text-red-500" /> });
+        toast({ title: "Seat Unbooked", description: `Seat ${seatNumber} has been unbooked.`, action: <Trash2 className="text-red-500" /> });
+    } catch (e) {
+        console.error("Firebase unbook error:", e);
+        toast({ title: "Error", description: "Failed to unbook seat.", variant: "destructive" });
+    }
   };
 
   const handleBookedSeatAction = (action: 'edit' | 'unbook', bookingId: string, seatNumber: number) => {
     if (action === 'edit') {
       handleOpenEditSeatPriceDialog(bookingId, seatNumber);
     } else if (action === 'unbook') {
-      // Potentially add a confirmation dialog here in the future
       handleUnbookSeat(bookingId, seatNumber);
     }
   };
 
 
-  const handleSetPriceForSelectedDate = () => {
+  const handleSetPriceForSelectedDate = async () => {
     if (!selectedDate) return;
     const newPrice = parseFloat(currentPriceInput);
     if (isNaN(newPrice) || newPrice < 0) {
@@ -189,23 +260,18 @@ export default function HomePage() {
       return;
     }
 
-    setDailyPrices(prevPrices => {
-      const existingPriceIndex = prevPrices.findIndex(
-        dp => startOfDay(dp.date).getTime() === startOfDay(selectedDate).getTime()
-      );
-      if (existingPriceIndex > -1) {
-        const updatedPrices = [...prevPrices];
-        updatedPrices[existingPriceIndex] = { ...updatedPrices[existingPriceIndex], price: newPrice };
-        return updatedPrices;
-      } else {
-        return [...prevPrices, { date: selectedDate, price: newPrice }];
-      }
-    });
-    toast({
-      title: 'Price Updated',
-      description: `Price for ${format(selectedDate, 'PPP')} set to $${newPrice.toFixed(2)}.`,
-      action: <CheckCircle2 className="text-green-500" />
-    });
+    const dateStr = format(selectedDate, 'yyyy-MM-dd');
+    try {
+      await set(ref(db, `dailyPrices/${dateStr}`), newPrice);
+      toast({
+        title: 'Price Updated',
+        description: `Price for ${format(selectedDate, 'PPP')} set to $${newPrice.toFixed(2)}.`,
+        action: <CheckCircle2 className="text-green-500" />
+      });
+    } catch (e) {
+      console.error("Firebase set daily price error:", e);
+      toast({ title: "Error", description: "Failed to set price in database.", variant: "destructive" });
+    }
   };
   
   const seatPriceForSelectedDate = useMemo(() => {
@@ -222,7 +288,7 @@ export default function HomePage() {
 
   const availableSeatsCount = TOTAL_SEATS - bookedSeatsForSelectedDate.length;
 
-  const handleBooking = () => {
+  const handleBooking = async () => {
     if (!selectedDate) {
       toast({ title: 'Booking Incomplete', description: 'Please select a date.', variant: 'destructive', action: <AlertTriangle className="text-destructive-foreground" /> });
       return;
@@ -239,7 +305,7 @@ export default function HomePage() {
       const stillAvailableSelectedSeats = selectedSeats.filter(s => !bookedSeatsForSelectedDate.includes(s));
       if (stillAvailableSelectedSeats.length !== selectedSeats.length) {
         toast({ title: 'Seat Conflict', description: 'Some selected seats were booked by another user. Please re-select.', variant: 'destructive', action: <AlertTriangle className="text-destructive-foreground" /> });
-        setSelectedSeats(stillAvailableSelectedSeats); 
+        setSelectedSeats(stillAvailableSelectedSeats);
         setBookingQuantity(String(stillAvailableSelectedSeats.length || 1));
         return;
       }
@@ -272,26 +338,30 @@ export default function HomePage() {
       return acc;
     }, {} as { [seatNumber: number]: number });
 
+    const newBookingId = `booking-${Date.now()}`;
     const newBooking: Booking = {
-      id: `booking-${Date.now()}`,
+      id: newBookingId,
       date: selectedDate,
       seats: seatsToBook,
       userName: userName.trim(),
       seatPrices: bookingSeatPrices,
     };
 
-    setCurrentBookings(prevBookings => [...prevBookings, newBooking]);
-    
-    const totalCost = quantityBooked * seatPriceForSelectedDate;
-    toast({
-      title: 'Booking Confirmed!',
-      description: `${userName.trim()} booked ${quantityBooked} seat(s) for ${format(selectedDate, 'PPP')}. Total cost: $${totalCost.toFixed(2)}. Seats: ${seatsToBook.join(', ')}.`,
-      action: <CheckCircle2 className="text-green-500" />,
-    });
-
-    setSelectedSeats([]); 
-    setUserName(''); 
-    setBookingQuantity('1'); 
+    try {
+      await set(ref(db, `bookings/${newBookingId}`), toFirebaseBooking(newBooking));
+      const totalCost = quantityBooked * seatPriceForSelectedDate;
+      toast({
+        title: 'Booking Confirmed!',
+        description: `${userName.trim()} booked ${quantityBooked} seat(s) for ${format(selectedDate, 'PPP')}. Total cost: $${totalCost.toFixed(2)}. Seats: ${seatsToBook.join(', ')}.`,
+        action: <CheckCircle2 className="text-green-500" />,
+      });
+      setSelectedSeats([]);
+      setUserName('');
+      setBookingQuantity('1');
+    } catch (e) {
+      console.error("Firebase booking error:", e);
+      toast({ title: "Error", description: "Failed to save booking to database.", variant: "destructive" });
+    }
   };
 
   const profitForSelectedDate = useMemo(() => {
@@ -303,26 +373,28 @@ export default function HomePage() {
         if (booking.seatPrices) {
           return totalProfit + Object.values(booking.seatPrices).reduce((sum, price) => sum + price, 0);
         }
+        // Fallback if seatPrices is somehow undefined, though it should always be set
         return totalProfit + (booking.seats.length * getSeatPriceForDate(booking.date));
       }, 0);
   }, [selectedDate, currentBookings, getSeatPriceForDate]);
 
+
   const disablePastDates = (date: Date) => isBefore(date, startOfDay(new Date()));
 
   const handleQuantityInputChange = (value: string) => {
-    setSelectedSeats([]); 
+    setSelectedSeats([]);
     const numValue = parseInt(value, 10);
     if (value === '') {
-      setBookingQuantity(''); 
+      setBookingQuantity('');
     } else if (!isNaN(numValue)) {
-      if (numValue <= 0) setBookingQuantity('1'); 
+      if (numValue <= 0) setBookingQuantity('1');
       else if (numValue > availableSeatsCount) setBookingQuantity(String(availableSeatsCount));
       else setBookingQuantity(String(numValue));
     }
   };
 
   const incrementQuantity = () => {
-    setSelectedSeats([]); 
+    setSelectedSeats([]);
     const currentQuantity = parseInt(bookingQuantity, 10) || 0;
     if (currentQuantity < availableSeatsCount) {
       setBookingQuantity(String(currentQuantity + 1));
@@ -330,7 +402,7 @@ export default function HomePage() {
   };
 
   const decrementQuantity = () => {
-    setSelectedSeats([]); 
+    setSelectedSeats([]);
     const currentQuantity = parseInt(bookingQuantity, 10) || 0;
     if (currentQuantity > 1) {
       setBookingQuantity(String(currentQuantity - 1));
@@ -338,6 +410,26 @@ export default function HomePage() {
   };
   
   const displayQuantity = selectedSeats.length > 0 ? selectedSeats.length : (parseInt(bookingQuantity, 10) || 0);
+
+  if (isLoading && !error) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-background to-secondary/50">
+        <Loader2 className="h-12 w-12 animate-spin text-primary" />
+        <p className="mt-4 text-lg text-muted-foreground">Loading booking data...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-background to-secondary/50 p-4">
+        <AlertTriangle className="h-12 w-12 text-destructive mb-4" />
+        <h2 className="text-2xl font-semibold text-destructive mb-2">Error Loading Data</h2>
+        <p className="text-muted-foreground mb-4 text-center">{error}</p>
+        <Button onClick={() => window.location.reload()}>Try Reloading</Button>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background to-secondary/50 py-8 px-4 flex flex-col items-center">
@@ -476,10 +568,10 @@ export default function HomePage() {
                     <Ticket className="mr-2 h-5 w-5 text-primary" /> Number of Seats (for new booking):
                   </Label>
                   <div className="flex items-center gap-2">
-                    <Button 
-                      variant="outline" 
-                      size="icon" 
-                      onClick={decrementQuantity} 
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={decrementQuantity}
                       disabled={(parseInt(bookingQuantity, 10) || 0) <= 1 || availableSeatsCount === 0 || selectedSeats.length > 0}
                       aria-label="Decrement seat quantity"
                     >
@@ -492,14 +584,14 @@ export default function HomePage() {
                       onChange={(e) => handleQuantityInputChange(e.target.value)}
                       className="w-20 text-center rounded-md shadow-sm"
                       min="1"
-                      max={availableSeatsCount > 0 ? availableSeatsCount : 1} 
+                      max={availableSeatsCount > 0 ? availableSeatsCount : 1}
                       disabled={availableSeatsCount === 0 || selectedSeats.length > 0}
                       aria-label="Number of seats to book by quantity"
                     />
-                    <Button 
-                      variant="outline" 
-                      size="icon" 
-                      onClick={incrementQuantity} 
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={incrementQuantity}
                       disabled={(parseInt(bookingQuantity, 10) || 0) >= availableSeatsCount || availableSeatsCount === 0 || selectedSeats.length > 0}
                       aria-label="Increment seat quantity"
                     >
@@ -521,7 +613,7 @@ export default function HomePage() {
             )}
             
             {selectedDate ? (
-              availableSeatsCount <= 0 && selectedSeats.length === 0 && ( 
+              availableSeatsCount <= 0 && selectedSeats.length === 0 && (
                 <div className="text-center mt-6 py-10 text-lg font-semibold text-destructive-foreground bg-destructive/80 rounded-md p-4 shadow">
                   Sorry, no seats available for new bookings on this date.
                 </div>
@@ -553,7 +645,7 @@ export default function HomePage() {
                     </div>
                   )}
                   <Button
-                    onClick={handleBooking} // This is for NEW bookings
+                    onClick={handleBooking}
                     disabled={displayQuantity === 0 || !userName.trim() || (availableSeatsCount === 0 && selectedSeats.length === 0)}
                     size="lg"
                     className="w-full text-lg font-semibold shadow-md hover:shadow-lg transition-shadow"
@@ -610,4 +702,3 @@ export default function HomePage() {
     </div>
   );
 }
-

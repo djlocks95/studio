@@ -3,10 +3,9 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { MOCK_BOOKINGS } from '@/data/mockBookings';
-import { MOCK_DAILY_PRICES } from '@/data/mockDailyPrices';
-import { MOCK_COMMISSION_AGENTS } from '@/data/mockCommissionAgents';
-import type { Booking, DailyPrice, CommissionAgent } from '@/lib/types';
+import { db } from '@/lib/firebase';
+import { ref, onValue, set, remove, update } from 'firebase/database';
+import type { Booking, DailyPrice, CommissionAgent, FirebaseBooking, FirebaseDailyPrice, FirebaseCommissionAgent } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -16,14 +15,14 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { useToast } from '@/hooks/use-toast';
-import { format, startOfDay, isEqual } from 'date-fns';
-import { ArrowLeft, BarChart3, CalendarDays, TrendingUp, Users, Percent, PlusCircle, Edit, Trash2, AlertTriangle, CheckCircle2, DollarSign, CalendarIcon, XCircle } from 'lucide-react';
+import { format, startOfDay, isEqual, parseISO } from 'date-fns';
+import { ArrowLeft, BarChart3, CalendarDays, TrendingUp, Users, Percent, PlusCircle, Edit, Trash2, AlertTriangle, CheckCircle2, DollarSign, CalendarIcon, XCircle, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const DEFAULT_SEAT_PRICE = 25;
 
 interface DailyProfitMetrics {
-  date: string;
+  date: string; // YYYY-MM-DD
   grossProfit: number;
   bookedSeats: number;
   commissionPaid: number;
@@ -31,7 +30,7 @@ interface DailyProfitMetrics {
 }
 
 interface MonthlyProfitMetrics {
-  month: string; // YYYY-MM format
+  month: string; // YYYY-MM
   grossProfit: number;
   bookedSeats: number;
   commissionPaid: number;
@@ -44,10 +43,28 @@ interface AgentPayout {
   totalCommission: number;
 }
 
+// Firebase data conversion helpers
+const fromFirebaseBooking = (fbBooking: FirebaseBooking): Booking => ({
+  ...fbBooking,
+  date: parseISO(fbBooking.date),
+  seatPrices: fbBooking.seatPrices ? Object.fromEntries(Object.entries(fbBooking.seatPrices).map(([key, value]) => [Number(key), value])) : undefined,
+});
+
+const fromFirebaseCommissionAgent = (fbAgent: FirebaseCommissionAgent): CommissionAgent => ({
+  ...fbAgent,
+  applicableDate: fbAgent.applicableDate ? parseISO(fbAgent.applicableDate) : undefined,
+});
+
+const toFirebaseCommissionAgent = (agent: CommissionAgent): FirebaseCommissionAgent => ({
+  ...agent,
+  applicableDate: agent.applicableDate ? agent.applicableDate.toISOString() : undefined,
+});
+
+
 export default function ProfitsPage() {
-  const [bookings] = React.useState<Booking[]>(MOCK_BOOKINGS);
-  const [dailyPricesData] = React.useState<DailyPrice[]>(MOCK_DAILY_PRICES);
-  const [commissionAgents, setCommissionAgents] = React.useState<CommissionAgent[]>(MOCK_COMMISSION_AGENTS);
+  const [bookings, setBookings] = React.useState<Booking[]>([]);
+  const [dailyPricesData, setDailyPricesData] = React.useState<DailyPrice[]>([]);
+  const [commissionAgents, setCommissionAgents] = React.useState<CommissionAgent[]>([]);
   
   const [newAgentName, setNewAgentName] = React.useState('');
   const [newAgentPercentage, setNewAgentPercentage] = React.useState('');
@@ -59,7 +76,65 @@ export default function ProfitsPage() {
   const [editAgentApplicableDate, setEditAgentApplicableDate] = React.useState<Date | undefined>(undefined);
   const [isEditDialogOpen, setIsEditDialogOpen] = React.useState(false);
 
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+
   const { toast } = useToast();
+
+  React.useEffect(() => {
+    setIsLoading(true);
+    const bookingsRef = ref(db, 'bookings');
+    const dailyPricesRef = ref(db, 'dailyPrices');
+    const agentsRef = ref(db, 'commissionAgents');
+
+    let activeSubscriptions = 3;
+    const checkLoadingDone = () => {
+        activeSubscriptions--;
+        if (activeSubscriptions === 0) {
+            setIsLoading(false);
+        }
+    }
+
+    const unsubscribeBookings = onValue(bookingsRef, (snapshot) => {
+      const data = snapshot.val();
+      setBookings(data ? Object.values(data as {[key: string]: FirebaseBooking}).map(fromFirebaseBooking) : []);
+      checkLoadingDone();
+    }, (err) => {
+      console.error("Firebase bookings fetch error:", err);
+      setError("Failed to load bookings.");
+      toast({ title: "Error", description: "Could not fetch bookings.", variant: "destructive" });
+      checkLoadingDone();
+    });
+
+    const unsubscribeDailyPrices = onValue(dailyPricesRef, (snapshot) => {
+      const data = snapshot.val();
+      setDailyPricesData(data ? Object.entries(data as {[key: string]: FirebaseDailyPrice['price']}).map(([dateStr, price]) => ({ date: parseISO(dateStr), price })) : []);
+      checkLoadingDone();
+    }, (err) => {
+      console.error("Firebase daily prices fetch error:", err);
+      setError("Failed to load daily prices.");
+      toast({ title: "Error", description: "Could not fetch daily prices.", variant: "destructive" });
+      checkLoadingDone();
+    });
+
+    const unsubscribeAgents = onValue(agentsRef, (snapshot) => {
+      const data = snapshot.val();
+      setCommissionAgents(data ? Object.values(data as {[key: string]: FirebaseCommissionAgent}).map(fromFirebaseCommissionAgent) : []);
+      checkLoadingDone();
+    }, (err) => {
+      console.error("Firebase agents fetch error:", err);
+      setError("Failed to load commission agents.");
+      toast({ title: "Error", description: "Could not fetch commission agents.", variant: "destructive" });
+      checkLoadingDone();
+    });
+    
+    return () => {
+      unsubscribeBookings();
+      unsubscribeDailyPrices();
+      unsubscribeAgents();
+    };
+  }, [toast]);
+
 
   const getSeatPriceForDate = React.useCallback((date: Date): number => {
     const specificPriceEntry = dailyPricesData.find(
@@ -90,7 +165,7 @@ export default function ProfitsPage() {
 
     const sortedDailyProfits: DailyProfitMetrics[] = Array.from(profitsMap.entries())
       .map(([dateString, data]) => {
-        const currentDate = startOfDay(new Date(dateString)); // Ensure we use startOfDay for consistent comparison
+        const currentDate = startOfDay(parseISO(dateString));
         let commissionPaidForDay = 0;
         commissionAgents.forEach(agent => {
             if (!agent.applicableDate || isEqual(startOfDay(agent.applicableDate), currentDate)) {
@@ -106,7 +181,7 @@ export default function ProfitsPage() {
           netProfit
         };
       })
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      .sort((a, b) => parseISO(b.date).getTime() - parseISO(a.date).getTime());
 
     return sortedDailyProfits;
   }, [bookings, getSeatPriceForDate, commissionAgents]);
@@ -115,7 +190,7 @@ export default function ProfitsPage() {
     const profitsMap = new Map<string, { grossProfit: number; bookedSeats: number; commissionPaid: number; netProfit: number }>();
 
     dailyProfits.forEach(daily => {
-      const monthStr = format(new Date(daily.date), 'yyyy-MM');
+      const monthStr = format(parseISO(daily.date), 'yyyy-MM');
       let currentData = profitsMap.get(monthStr) || { grossProfit: 0, bookedSeats: 0, commissionPaid: 0, netProfit: 0 };
       currentData.grossProfit += daily.grossProfit;
       currentData.bookedSeats += daily.bookedSeats;
@@ -146,7 +221,7 @@ export default function ProfitsPage() {
     const payoutsMap = new Map<string, number>();
     
     dailyProfits.forEach(daily => {
-      const currentDate = startOfDay(new Date(daily.date));
+      const currentDate = startOfDay(parseISO(daily.date));
       commissionAgents.forEach(agent => {
         let commissionEarnedThisDay = 0;
         if (!agent.applicableDate || isEqual(startOfDay(agent.applicableDate), currentDate)) {
@@ -164,7 +239,7 @@ export default function ProfitsPage() {
   }, [dailyProfits, commissionAgents]);
 
 
-  const handleAddAgent = () => {
+  const handleAddAgent = async () => {
     const percentageVal = parseFloat(newAgentPercentage);
     if (!newAgentName.trim() || isNaN(percentageVal) || percentageVal < 0 || percentageVal > 100) {
       toast({
@@ -175,30 +250,42 @@ export default function ProfitsPage() {
       });
       return;
     }
+    const newAgentId = `agent-${Date.now()}`;
     const newAgent: CommissionAgent = {
-      id: `agent-${Date.now()}`,
+      id: newAgentId,
       name: newAgentName.trim(),
       percentage: percentageVal,
       applicableDate: newAgentApplicableDate ? startOfDay(newAgentApplicableDate) : undefined,
     };
-    setCommissionAgents(prev => [...prev, newAgent]);
-    setNewAgentName('');
-    setNewAgentPercentage('');
-    setNewAgentApplicableDate(undefined);
-    toast({
-      title: 'Agent Added',
-      description: `${newAgent.name} added with ${newAgent.percentage}% commission ${newAgent.applicableDate ? `for ${format(newAgent.applicableDate, 'PPP')}` : '(global)'}.`,
-      action: <CheckCircle2 className="text-green-500" />,
-    });
+    
+    try {
+      await set(ref(db, `commissionAgents/${newAgentId}`), toFirebaseCommissionAgent(newAgent));
+      setNewAgentName('');
+      setNewAgentPercentage('');
+      setNewAgentApplicableDate(undefined);
+      toast({
+        title: 'Agent Added',
+        description: `${newAgent.name} added with ${newAgent.percentage}% commission ${newAgent.applicableDate ? `for ${format(newAgent.applicableDate, 'PPP')}` : '(global)'}.`,
+        action: <CheckCircle2 className="text-green-500" />,
+      });
+    } catch (e) {
+      console.error("Firebase add agent error:", e);
+      toast({ title: "Error", description: "Failed to add agent to database.", variant: "destructive" });
+    }
   };
 
-  const handleRemoveAgent = (agentId: string) => {
-    setCommissionAgents(prev => prev.filter(agent => agent.id !== agentId));
-    toast({
-      title: 'Agent Removed',
-      description: 'Commission agent has been removed.',
-      action: <Trash2 className="text-green-500" />,
-    });
+  const handleRemoveAgent = async (agentId: string) => {
+    try {
+      await remove(ref(db, `commissionAgents/${agentId}`));
+      toast({
+        title: 'Agent Removed',
+        description: 'Commission agent has been removed.',
+        action: <Trash2 className="text-green-500" />,
+      });
+    } catch (e) {
+      console.error("Firebase remove agent error:", e);
+      toast({ title: "Error", description: "Failed to remove agent from database.", variant: "destructive" });
+    }
   };
 
   const handleOpenEditDialog = (agent: CommissionAgent) => {
@@ -209,7 +296,7 @@ export default function ProfitsPage() {
     setIsEditDialogOpen(true);
   };
 
-  const handleSaveAgentEdit = () => {
+  const handleSaveAgentEdit = async () => {
     if (!editingAgent) return;
     const percentageVal = parseFloat(editPercentage);
     if (!editName.trim() || isNaN(percentageVal) || percentageVal < 0 || percentageVal > 100) {
@@ -221,21 +308,48 @@ export default function ProfitsPage() {
       });
       return;
     }
-    setCommissionAgents(prev => 
-      prev.map(agent => 
-        agent.id === editingAgent.id 
-        ? { ...agent, name: editName.trim(), percentage: percentageVal, applicableDate: editAgentApplicableDate ? startOfDay(editAgentApplicableDate) : undefined } 
-        : agent
-      )
-    );
-    setIsEditDialogOpen(false);
-    setEditingAgent(null);
-    toast({
-      title: 'Agent Updated',
-      description: 'Commission agent details updated successfully.',
-      action: <CheckCircle2 className="text-green-500" />,
-    });
+    
+    const updatedAgent: CommissionAgent = {
+        ...editingAgent,
+        name: editName.trim(),
+        percentage: percentageVal,
+        applicableDate: editAgentApplicableDate ? startOfDay(editAgentApplicableDate) : undefined,
+    };
+
+    try {
+      await update(ref(db, `commissionAgents/${editingAgent.id}`), toFirebaseCommissionAgent(updatedAgent));
+      setIsEditDialogOpen(false);
+      setEditingAgent(null);
+      toast({
+        title: 'Agent Updated',
+        description: 'Commission agent details updated successfully.',
+        action: <CheckCircle2 className="text-green-500" />,
+      });
+    } catch (e) {
+        console.error("Firebase update agent error:", e);
+        toast({ title: "Error", description: "Failed to update agent in database.", variant: "destructive" });
+    }
   };
+
+  if (isLoading && !error) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-background to-secondary/50">
+        <Loader2 className="h-12 w-12 animate-spin text-primary" />
+        <p className="mt-4 text-lg text-muted-foreground">Loading profit data...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+     return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-background to-secondary/50 p-4">
+        <AlertTriangle className="h-12 w-12 text-destructive mb-4" />
+        <h2 className="text-2xl font-semibold text-destructive mb-2">Error Loading Data</h2>
+        <p className="text-muted-foreground mb-4 text-center">{error}</p>
+        <Button onClick={() => window.location.reload()}>Try Reloading</Button>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background to-secondary/50 py-8 px-4 flex flex-col items-center">
@@ -272,20 +386,20 @@ export default function ProfitsPage() {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end p-4 border rounded-lg bg-card shadow-sm">
               <div>
                 <Label htmlFor="agentName" className="font-medium">Agent Name</Label>
-                <Input 
-                  id="agentName" 
-                  placeholder="e.g. John Doe" 
-                  value={newAgentName} 
+                <Input
+                  id="agentName"
+                  placeholder="e.g. John Doe"
+                  value={newAgentName}
                   onChange={(e) => setNewAgentName(e.target.value)}
                   className="mt-1"
                 />
               </div>
               <div>
                 <Label htmlFor="agentPercentage" className="font-medium">Commission (%)</Label>
-                <Input 
-                  id="agentPercentage" 
-                  type="number" 
-                  placeholder="e.g. 5" 
+                <Input
+                  id="agentPercentage"
+                  type="number"
+                  placeholder="e.g. 5"
                   value={newAgentPercentage}
                   onChange={(e) => setNewAgentPercentage(e.target.value)}
                   min="0"
@@ -319,9 +433,9 @@ export default function ProfitsPage() {
                   </PopoverContent>
                 </Popover>
                  {newAgentApplicableDate && (
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="absolute right-0 top-5 p-1 h-auto text-muted-foreground hover:text-destructive"
                       onClick={() => setNewAgentApplicableDate(undefined)}
                       aria-label="Clear date"
@@ -426,7 +540,7 @@ export default function ProfitsPage() {
                 <TableBody>
                   {dailyProfits.map(item => (
                     <TableRow key={item.date}>
-                      <TableCell className="font-medium">{format(new Date(item.date), 'PPP')}</TableCell>
+                      <TableCell className="font-medium">{format(parseISO(item.date), 'PPP')}</TableCell>
                       <TableCell className="text-center">{item.bookedSeats}</TableCell>
                       <TableCell className="text-right">${item.grossProfit.toFixed(2)}</TableCell>
                       <TableCell className="text-right text-destructive">-${item.commissionPaid.toFixed(2)}</TableCell>
@@ -464,7 +578,7 @@ export default function ProfitsPage() {
               <TableBody>
                 {monthlyProfits.map(item => (
                   <TableRow key={item.month}>
-                    <TableCell className="font-medium">{format(new Date(item.month + '-02'), 'MMMM yyyy')}</TableCell> 
+                    <TableCell className="font-medium">{format(parseISO(item.month + '-02'), 'MMMM yyyy')}</TableCell>
                     <TableCell className="text-center">{item.bookedSeats}</TableCell>
                     <TableCell className="text-right">${item.grossProfit.toFixed(2)}</TableCell>
                     <TableCell className="text-right text-destructive">-${item.commissionPaid.toFixed(2)}</TableCell>
@@ -492,23 +606,23 @@ export default function ProfitsPage() {
             <div className="grid gap-4 py-4">
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="editName" className="text-right">Name</Label>
-                <Input 
-                  id="editName" 
-                  value={editName} 
-                  onChange={(e) => setEditName(e.target.value)} 
+                <Input
+                  id="editName"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
                   className="col-span-3"
                 />
               </div>
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="editPercentage" className="text-right">Percentage (%)</Label>
-                <Input 
-                  id="editPercentage" 
-                  type="number" 
-                  value={editPercentage} 
+                <Input
+                  id="editPercentage"
+                  type="number"
+                  value={editPercentage}
                   onChange={(e) => setEditPercentage(e.target.value)}
                   min="0"
                   max="100"
-                  step="0.1" 
+                  step="0.1"
                   className="col-span-3"
                 />
               </div>
@@ -538,9 +652,9 @@ export default function ProfitsPage() {
                     </PopoverContent>
                   </Popover>
                   {editAgentApplicableDate && (
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="absolute right-0 top-1/2 -translate-y-1/2 p-1 h-auto text-muted-foreground hover:text-destructive"
                       onClick={() => setEditAgentApplicableDate(undefined)}
                       aria-label="Clear date"
@@ -567,4 +681,3 @@ export default function ProfitsPage() {
     </div>
   );
 }
-
