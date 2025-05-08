@@ -23,4 +23,6 @@ export interface CommissionAgent {
   id: string;
   name: string;
   percentage: number; // Store as a number e.g., 5 for 5%
+  applicableDate?: Date; // If set, commission only applies to this specific date
 }
+
