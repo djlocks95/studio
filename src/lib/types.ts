@@ -7,12 +7,13 @@ export interface Booking {
   seatPrices?: { [seatNumber: number]: number }; // Price paid for each seat
 }
 
-export interface Seat {
-  id: number;
-  isBooked: boolean;
-  isSelected: boolean;
-  isAvailable: boolean;
-}
+// The Seat interface is no longer needed as individual seat selection is removed.
+// export interface Seat {
+//   id: number;
+//   isBooked: boolean;
+//   isSelected: boolean;
+//   isAvailable: boolean;
+// }
 
 export interface DailyPrice {
   date: Date;

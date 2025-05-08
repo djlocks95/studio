@@ -1,3 +1,4 @@
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -106,31 +107,68 @@ body {
   body {
     @apply bg-background text-foreground;
   }
+  
+  /* General style for days with any bookings */
   .day-with-bookings {
-    position: relative;
+    /* position: relative; */ /* Already applied by .rdp-day */
   }
-  .day-with-bookings::after {
+  /* Dot marker for days with bookings (used as a fallback or general indicator) */
+  .day-with-bookings:not(.day-fully-booked):not(.day-partially-booked)::after {
     content: '';
     position: absolute;
-    bottom: 4px;
+    bottom: 4px; /* Adjusted for DayContent */
     left: 50%;
     transform: translateX(-50%);
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
     border-radius: 9999px;
-    background-color: hsl(var(--accent));
+    background-color: hsl(var(--accent)/0.7);
   }
+  
   .rdp-day_today.day-with-bookings::after {
-    background-color: hsl(var(--primary)); /* Use primary color for dot on today's date if it has bookings and accent background */
+    background-color: hsl(var(--primary)/0.7); 
   }
-  /* Ensure dot is visible on selected days */
+
+  /* Style for partially booked days (e.g., green border or background tint) */
+  .day-partially-booked:not([aria-selected="true"]):not(.rdp-day_today) {
+    /* background-color: hsl(var(--accent) / 0.1); */
+    /* border: 1px solid hsl(var(--accent) / 0.5); */
+    font-weight: 600;
+  }
+  .day-partially-booked.rdp-day_today:not([aria-selected="true"]) {
+     /* background-color: hsl(var(--accent) / 0.2); */
+     /* border: 1px solid hsl(var(--accent) / 0.7); */
+     font-weight: 600;
+  }
+   .day-partially-booked[aria-selected="true"] {
+    /* background-color: hsl(var(--primary) / 0.8) !important; */
+    /* border: 1px solid hsl(var(--accent)) !important; */
+    font-weight: 600;
+  }
+
+
+  /* Style for fully booked days (e.g., red border or background tint) */
+  .day-fully-booked:not([aria-selected="true"]):not(.rdp-day_today) {
+    /* background-color: hsl(var(--destructive) / 0.1); */
+    /* border: 1px solid hsl(var(--destructive) / 0.5); */
+    color: hsl(var(--muted-foreground));
+    opacity: 0.8;
+  }
+   .day-fully-booked.rdp-day_today:not([aria-selected="true"]) {
+     /* background-color: hsl(var(--destructive) / 0.2); */
+     /* border: 1px solid hsl(var(--destructive) / 0.7); */
+     color: hsl(var(--muted-foreground));
+     opacity: 0.8;
+  }
+  .day-fully-booked[aria-selected="true"] {
+    /* background-color: hsl(var(--primary) / 0.8) !important; */
+    /* border: 1px solid hsl(var(--destructive)) !important; */
+    color: hsl(var(--primary-foreground) / 0.7) !important;
+    opacity: 0.8;
+  }
+  /* Ensure dot is visible on selected days if not using specific count */
   .rdp-day_selected.day-with-bookings::after,
   .rdp-day_selected.rdp-day_today.day-with-bookings::after {
-     /* If selected bg is primary, accent dot is fine. If selected is accent, primary dot.
-        Default selected is primary bg. So accent dot is visible.
-        If today is selected, today style might take precedence.
-        The RDP default for selected is `bg-primary text-primary-foreground`.
-        The dot with `bg-accent` will be visible.
-     */
+     /* If selected bg is primary, accent dot is fine. */
   }
 }
